@@ -205,7 +205,10 @@ class StrategyEngine:
             "nearest": nearest_level
         }
         
-        return self._format_output(decision, "pa", reason, 1.0, None, metrics=metrics)
+        # Calculate final regime label for reporting
+        regime_label = "Trendy" if is_tradable else "Sideways/Slow"
+        
+        return self._format_output(decision, regime_label, reason, 1.0, None, metrics=metrics)
 
     def _format_output(self, decision: str, regime: str, reason: str, score: float, features: np.ndarray = None, metrics: Dict = None) -> Dict:
         output = {

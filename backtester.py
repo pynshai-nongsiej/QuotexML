@@ -88,6 +88,13 @@ class Backtester:
         print("\nPerformance by Regime:")
         print(trades.groupby('regime')['success'].agg(['count', 'mean']))
 
+        # Regime Distribution (All periods)
+        print("\nMarket Regime Breakdown (Total Candles Analyzed):")
+        regime_counts = results_df['regime'].value_counts()
+        regime_pct = results_df['regime'].value_counts(normalize=True) * 100
+        for regime, count in regime_counts.items():
+            print(f" - {regime}: {count} candles ({regime_pct[regime]:.1f}%)")
+
 if __name__ == "__main__":
     from data_generator import generate_sample_data
     

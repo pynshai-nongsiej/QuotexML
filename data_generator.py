@@ -101,6 +101,17 @@ def generate_sample_data(n: int = 500, mode: str = "random_walk"):
                 open_p[i+4] = close[i+3]
                 high[i+4] = open_p[i+4]
                 low[i+4] = close[i+4]
+
+        # RE-INJECT SIDEWAYS ZONES
+        # Every 500 candles, add 50 candles of "noise" with low volatility
+        for i in range(500, n-50, 500):
+            # Flat price around current value
+            base_p = close[i]
+            for j in range(i, i+50):
+                close[j] = base_p + np.random.normal(0, 0.05)
+                open_p[j] = close[j] - np.random.normal(0, 0.02)
+                high[j] = max(open_p[j], close[j]) + 0.05
+                low[j] = min(open_p[j], close[j]) - 0.05
     else:
         # Random Walk
         close = 100 + np.cumsum(np.random.normal(0, 0.5, n))
