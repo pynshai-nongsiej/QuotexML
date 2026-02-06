@@ -57,7 +57,9 @@ class LiveTrader:
             "draws": 0,
             "pnl": 0.0
         }
-        self.trade_history = [] # List of dicts: {time, asset, side, price, result, profit}
+        self.trade_history = [] 
+        self.last_trade_time = 0
+        self.trade_lock = asyncio.Lock()
         
         self.global_balance = 0.0
         
@@ -73,7 +75,6 @@ class LiveTrader:
             Layout(name="footer", size=3)
         )
         
-        # Split body into Market (Left) and History (Right)
         layout["body"].split_row(
             Layout(name="market", ratio=3),
             Layout(name="history", ratio=2)
@@ -82,7 +83,6 @@ class LiveTrader:
         data = self.market_state[self.asset]
         current_time = datetime.now().strftime("%H:%M:%S")
         
-        # --- HEADER (Summary Box) ---
         header_table = Table.grid(expand=True)
         header_table.add_row(
             f"[bold cyan]QUOTEX CALL SNIPER v5.3 | {self.mode}[/bold cyan]", 
@@ -100,7 +100,6 @@ class LiveTrader:
         
         layout["header"].update(Panel(header_panel_content, style="blue"))
         
-        # --- LEFT: MARKET TABLE ---
         market_table = Table(box=box.DOUBLE_EDGE, expand=True, header_style="bold white on blue")
         market_table.add_column("Indicator", style="cyan")
         market_table.add_column("Value", justify="right")
@@ -110,7 +109,6 @@ class LiveTrader:
         ema = data['ema50']
         trend_label = "UPTREND" if px > ema else "DOWNTREND"
         trend_style = "bold green" if px > ema else "bold red"
-        
         rsi_val = float(data.get('rsi', 50))
         rsi_style = "bold green" if rsi_val > 60 else "bold red" if rsi_val < 40 else "white"
         
@@ -135,13 +133,11 @@ class LiveTrader:
         
         layout["market"].update(Panel(market_table, title=f"[bold]Market Data: {self.asset}[/bold]", border_style="white"))
         
-        # --- RIGHT: TRADE HISTORY ---
         history_table = Table(box=box.SIMPLE, expand=True, header_style="bold magenta")
         history_table.add_column("Time", style="dim")
         history_table.add_column("Result", justify="center")
         history_table.add_column("P/L", justify="right")
 
-        # Show last 8 trades
         for trade in reversed(self.trade_history[-8:]):
             res_style = "bold green" if trade['result'] == "WIN" else "bold red" if trade['result'] == "LOSS" else "white"
             pnl_style = "green" if trade['profit'] > 0 else "red" if trade['profit'] < 0 else "white"
@@ -153,8 +149,7 @@ class LiveTrader:
             
         layout["history"].update(Panel(history_table, title="[bold]Session History[/bold]", border_style="magenta"))
         
-        # --- FOOTER ---
-        footer_text = "Mode: CALL-ONLY Precision Sniper | 2s Pulse Feed | High Intensity 15s"
+        footer_text = f"Mode: CALL-ONLY | Timeframe: {self.timeframe}s | Pulse: 2s"
         layout["footer"].update(Align.center(f"[dim]{footer_text}[/dim]"))
         return layout
         
@@ -166,19 +161,16 @@ class LiveTrader:
         self.running = True
         
         with Live(self.generate_dashboard(), refresh_per_second=2, screen=True) as live:
-            async def update_loop():
-                while self.running:
-                    try:
-                        await self.refresh_data(self.asset)
-                        self.global_balance = await self.client.get_balance() 
-                        live.update(self.generate_dashboard())
-                    except Exception as e:
-                        with open(self.debug_file, "a") as f: f.write(f"Loop error: {e}\n")
-                    
-                    sleep_time = 2 if self.timeframe <= 15 else 5
-                    await asyncio.sleep(sleep_time) 
-
-            await update_loop()
+            while self.running:
+                try:
+                    await self.refresh_data(self.asset)
+                    self.global_balance = await self.client.get_balance() 
+                    live.update(self.generate_dashboard())
+                except Exception as e:
+                    with open(self.debug_file, "a") as f: f.write(f"Loop error: {e}\n")
+                
+                sleep_time = 2 if self.timeframe <= 15 else 5
+                await asyncio.sleep(sleep_time) 
 
     async def refresh_data(self, asset):
         history_size = self.timeframe * 100 
@@ -210,37 +202,41 @@ class LiveTrader:
         })
 
         if decision['decision'] == "UP": 
-            await self.execute_trade(asset, decision)
+            # Non-blocking trade execution with cooldown
+            if time.time() - self.last_trade_time > self.timeframe: 
+                asyncio.create_task(self.execute_trade(asset, decision))
 
     async def execute_trade(self, asset, decision):
-        target = max(1, int(self.global_balance * 0.02))
-        direction = "call"
-        self.market_state[asset]["status"] = "SNIPING CALL..."
-        
-        status, buy_info = await self.client.buy(target, asset, direction, self.timeframe)
-        if status:
-            win_amount = await self.client.check_win(buy_info.get('id'))
-            outcome = "WIN" if win_amount > target else "LOSS" if win_amount < target else "DRAW"
-            profit = win_amount - target
+        async with self.trade_lock:
+            if time.time() - self.last_trade_time < self.timeframe: return
+            self.last_trade_time = time.time()
             
-            # Update Stats
-            self.session_stats['total_trades'] += 1
-            if outcome == "WIN": self.session_stats['wins'] += 1
-            elif outcome == "LOSS": self.session_stats['losses'] += 1
-            else: self.session_stats['draws'] += 1
-            self.session_stats['pnl'] += profit
+            target = max(1, int(self.global_balance * 0.02))
+            direction = "call"
+            self.market_state[asset]["status"] = "SNIPING CALL..."
             
-            # Record History
-            self.trade_history.append({
-                "time": datetime.now().strftime("%H:%M:%S"),
-                "asset": asset,
-                "result": outcome,
-                "profit": profit
-            })
-            
-            self.market_state[asset]["status"] = f"Last Result: {outcome}"
-        else:
-            self.market_state[asset]["status"] = "Execution Blocked"
+            status, buy_info = await self.client.buy(target, asset, direction, self.timeframe)
+            if status:
+                # Wait for result in background
+                win_amount = await self.client.check_win(buy_info.get('id'))
+                outcome = "WIN" if win_amount > target else "LOSS" if win_amount < target else "DRAW"
+                profit = win_amount - target
+                
+                self.session_stats['total_trades'] += 1
+                if outcome == "WIN": self.session_stats['wins'] += 1
+                elif outcome == "LOSS": self.session_stats['losses'] += 1
+                else: self.session_stats['draws'] += 1
+                self.session_stats['pnl'] += profit
+                
+                self.trade_history.append({
+                    "time": datetime.now().strftime("%H:%M:%S"),
+                    "asset": asset,
+                    "result": outcome,
+                    "profit": profit
+                })
+                self.market_state[asset]["status"] = f"Last: {outcome}"
+            else:
+                self.market_state[asset]["status"] = "Execution Blocked"
 
     async def stop(self):
         self.running = False
