@@ -1,0 +1,19 @@
+# QuotexML Strategy Configuration
+
+strategy:
+  atr_threshold: 0.005
+  confluence_threshold: 0.6
+  ema_fast: 9
+  ema_medium: 21
+  ema_slow: 50
+  rsi_period: 14
+  window_size: 100
+
+backtest:
+  sampling_step: 1
+  start_index: 200
+
+ml:
+  model_path: "confluence_model.joblib"
+  n_estimators: 100
+  max_depth: 3

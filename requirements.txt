@@ -1,0 +1,11 @@
+playwright
+websockets
+pandas
+pyyaml
+loguru
+rich
+pyfiglet
+requests
+beautifulsoup4
+websocket-client
+playwright-stealth
