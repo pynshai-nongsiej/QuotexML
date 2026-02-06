@@ -91,6 +91,33 @@ class StrategyEngine:
             
         return type_, color, upper_wick_ratio, lower_wick_ratio
 
+    def check_market_regime(self, tech: pd.DataFrame, window: int = 15) -> Tuple[bool, str]:
+        """
+        Analyzes the last 15 minutes to determine if the market is Trendy or Sideways/Slow.
+        Returns: (is_tradable, status_message)
+        """
+        # Get last 15 periods
+        data = tech.tail(window)
+        
+        # 1. Trend Strength (ADX)
+        curr_adx = data['adx'].iloc[-1]
+        avg_adx = data['adx'].mean()
+        
+        # 2. Volatility (BB Width)
+        curr_bbw = data['bb_width'].iloc[-1]
+        
+        # 3. Sideways/Slow Detection
+        if avg_adx < 20 and curr_adx < 25:
+            # Low ADX over 15m means no clear direction (Sideways)
+            return False, f"Wait: Sideways Market (ADX {curr_adx:.1f})"
+            
+        if curr_bbw < 0.0008:
+            # Low BB width means market is "slow" / consolidating in a tight range
+            return False, f"Wait: Slow Market (BBW {curr_bbw:.4f})"
+            
+        # 4. Success Case: Trendy Market
+        return True, "Trendy Market"
+
     def execute(self, df: pd.DataFrame, pre_calc_tech: pd.DataFrame = None) -> Dict:
         """
         Analyzes data and returns UP/DOWN based on SNR + Candle Rejections.
@@ -144,40 +171,35 @@ class StrategyEngine:
         # We need Momentum Exhaustion (RSI)
         rsi = tech['rsi'].iloc[-1]
         
+        # --- REGIME FILTER (15m Lookback) ---
+        is_tradable, regime_msg = self.check_market_regime(tech, window=15)
+        
         # 3. Strategy Execution (Dynamic Breakout / Momentum)
         # Data showed 12% WR for Reversion, implying 88% WR for Breakout.
         # We FOLLOW the move when it hits extreme levels.
         
-        # UP Signal (Breakout UP)
-        # 1. Price touched Upper Level
-        # 2. RSI is Strong (> 65)
-        # 3. Candle is Green (Momentum is UP)
-        
-        if curr['high'] >= upper_level:
-             if rsi > 65 and color == "GREEN":
-                  decision = "UP"
-                  reason = f"Dynamic Breakout UP (Dev 2.5 + RSI {rsi:.1f})"
-                  
-        # DOWN Signal (Breakout DOWN)
-        # 1. Price touched Lower Level
-        # 2. RSI is Weak (< 35)
-        # 3. Candle is Red
-        
-        if curr['low'] <= lower_level:
-             if rsi < 35 and color == "RED":
-                  decision = "DOWN"
-                  reason = f"Dynamic Breakout DOWN (Dev 2.5 + RSI {rsi:.1f})"
+        # Only execute if market is trendy
+        if is_tradable:
+            # UP Signal (Breakout UP)
+            if curr['high'] >= upper_level:
+                 if rsi > 65 and color == "GREEN":
+                      decision = "UP"
+                      reason = f"Dynamic Breakout UP (Dev 2.5 + RSI {rsi:.1f})"
+                      
+            # DOWN Signal (Breakout DOWN)
+            if curr['low'] <= lower_level:
+                 if rsi < 35 and color == "RED":
+                      decision = "DOWN"
+                      reason = f"Dynamic Breakout DOWN (Dev 2.5 + RSI {rsi:.1f})"
+        else:
+            decision = "WAIT"
+            reason = regime_msg
 
         metrics = {
             "dyn_res": upper_level,
             "dyn_sup": lower_level,
             "rsi": rsi,
-            "pattern": pattern
-        }
-        
-        # Fallback: ML is not used, pure PA.
-        
-        metrics = {
+            "adx": tech['adx'].iloc[-1],
             "pattern": pattern,
             "snr_levels": levels[-3:] if levels else [],
             "nearest": nearest_level

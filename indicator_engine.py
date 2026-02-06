@@ -81,6 +81,26 @@ class IndicatorEngine:
         return dem * 100
 
     @staticmethod
+    def adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
+        """
+        Calculates Average Directional Index (ADX).
+        """
+        plus_dm = df['high'].diff()
+        minus_dm = -df['low'].diff()
+        
+        plus_dm[plus_dm < 0] = 0
+        minus_dm[minus_dm < 0] = 0
+        
+        # Smoothed TR, +DM, -DM
+        tr = IndicatorEngine.atr(df, period)
+        plus_di = 100 * (plus_dm.rolling(window=period).mean() / tr)
+        minus_di = 100 * (minus_dm.rolling(window=period).mean() / tr)
+        
+        dx = 100 * np.abs(plus_di - minus_di) / (plus_di + minus_di)
+        adx = dx.rolling(window=period).mean()
+        return adx
+
+    @staticmethod
     def zigzag(df: pd.DataFrame, deviation: int = 5, depth: int = 12, backstep: int = 3) -> pd.Series:
         """
         Calculates ZigZag Trend Direction (Causal).
@@ -220,9 +240,15 @@ class IndicatorEngine:
         # ATR for ML Scorer
         df['atr'] = self.atr(df, period=14)
         
-        # ZigZag & DeMarker (Keep for safety or remove? Keep for now to avoid other hidden deps)
+        # ZigZag & DeMarker
         df['zigzag_trend'] = self.zigzag(df, deviation=5, depth=12, backstep=3)
         df['demarker'] = self.demarker(df, period=14)
+        
+        # Trend Strength (ADX)
+        df['adx'] = self.adx(df, period=14)
+        
+        # Bollinger Band Width (Ratio for Volatility check)
+        df['bb_width'] = (df['bb_upper'] - df['bb_lower']) / df['bb_mid']
         
         return df
 

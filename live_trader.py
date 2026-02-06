@@ -40,7 +40,7 @@ class LiveTrader:
         self.console = Console()
         
         # Shared State for Dashboard
-        self.market_state = {asset: {"price": 0.0, "rsi": 0.0, "score": 0.0, "status": "Initializing...", "action": "-", "profit": 0.0} for asset in self.assets}
+        self.market_state = {asset: {"price": 0.0, "rsi": 0.0, "adx": 0.0, "score": 0.0, "status": "Initializing...", "action": "-", "profit": 0.0} for asset in self.assets}
         self.global_balance = 0.0
         self.total_profit = 0.0
         
@@ -77,6 +77,7 @@ class LiveTrader:
         table.add_column("Asset", style="cyan", no_wrap=True)
         table.add_column("Price", style="white")
         table.add_column("RSI (14)", justify="center")
+        table.add_column("Trend (ADX)", justify="center")
         table.add_column("Zone Status", justify="center")
         table.add_column("Confluence", justify="right")
         table.add_column("Action", justify="center")
@@ -100,12 +101,17 @@ class LiveTrader:
             if data['action'] == "UP": action_bg = "on green"
             elif data['action'] == "DOWN": action_bg = "on red"
             
+            # Trend Strength (ADX)
+            adx_val = data.get('adx', 0)
+            adx_style = "bold yellow" if adx_val > 25 else "dim"
+            
             pnl_color = "green" if data['profit'] > 0 else "red" if data['profit'] < 0 else "white"
             
             table.add_row(
                 f"[bold]{asset}[/bold]",
                 f"{data['price']:.5f}",
                 f"[{rsi_style}]{rsi_val:.1f}[/{rsi_style}]",
+                f"[{adx_style}]{adx_val:.1f}[/{adx_style}]",
                 f"[{zone_style}]{zone}[/{zone_style}]",
                 f"[{score_style}]{data['score']:.2f}[/{score_style}]",
                 f"[bold white {action_bg}] {data['action']} [/bold white {action_bg}]",
@@ -216,10 +222,11 @@ class LiveTrader:
                 self.market_state[asset].update({
                     "price": price,
                     "rsi": metrics.get('rsi', 50),
+                    "adx": metrics.get('adx', 0),
                     "zone": zone,
                     "score": decision['confluence_score'],
                     "action": decision['decision'],
-                    "status": f"Watching: {decision['reason']}"
+                    "status": f"{decision['reason']}"
                 })
 
                 # Execute at :00 ideally
