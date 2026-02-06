@@ -39,6 +39,10 @@ class LiveTrader:
         self.timeframe = timeframe 
         self.mode = mode 
         self.running = False
+        self.is_connected = False
+        self.reconnect_attempts = 0
+        self.last_reconnect_time = "N/A"
+        
         self.log_file = "logs/learning_data.csv"
         self.debug_file = "logs/debug_live.log"
         self.console = Console()
@@ -83,16 +87,23 @@ class LiveTrader:
         data = self.market_state[self.asset]
         current_time = datetime.now().strftime("%H:%M:%S")
         
+        # --- HEADER ---
         header_table = Table.grid(expand=True)
+        
+        # Connection Status with Pulse
+        conn_color = "green" if self.is_connected else "red"
+        conn_text = "ONLINE" if self.is_connected else "RECONNECTING"
+        conn_indicator = f"[{conn_color}]● {conn_text}[/{conn_color}]"
+        
         header_table.add_row(
-            f"[bold cyan]QUOTEX CALL SNIPER v5.3 | {self.mode}[/bold cyan]", 
-            f"[bold white]Time: {current_time}[/bold white]",
-            f"[bold green]Balance: ${self.global_balance:.2f}[/bold green]"
+            f"[bold cyan]QUOTEX CALL SNIPER v5.4 | {self.mode}[/bold cyan]", 
+            f"[bold white]{current_time}[/bold white]",
+            conn_indicator
         )
         
         stats = self.session_stats
         pnl_color = "green" if stats['pnl'] > 0 else "red" if stats['pnl'] < 0 else "white"
-        stats_line = f"[white]Trades: {stats['total_trades']} | Wins: [green]{stats['wins']}[/green] | Losses: [red]{stats['losses']}[/red] | P/L: [{pnl_color}]${stats['pnl']:.2f}[/{pnl_color}][/white]"
+        stats_line = f"[white]Balance: [bold green]${self.global_balance:.2f}[/bold green] | Wins: [green]{stats['wins']}[/green] | Losses: [red]{stats['losses']}[/red] | P/L: [{pnl_color}]${stats['pnl']:.2f}[/{pnl_color}][/white]"
         
         header_panel_content = Table.grid(expand=True)
         header_panel_content.add_row(header_table)
@@ -100,6 +111,7 @@ class LiveTrader:
         
         layout["header"].update(Panel(header_panel_content, style="blue"))
         
+        # --- MARKET TABLE ---
         market_table = Table(box=box.DOUBLE_EDGE, expand=True, header_style="bold white on blue")
         market_table.add_column("Indicator", style="cyan")
         market_table.add_column("Value", justify="right")
@@ -126,13 +138,14 @@ class LiveTrader:
         
         action_bg = "on green" if data['action'] == "UP" else ""
         market_table.add_row(
-            "[bold yellow]CURRENT SIGNAL[/bold yellow]", 
+            "[bold yellow]SIGNAL INFO[/bold yellow]", 
             f"[bold white {action_bg}] {data['action']} [/bold white {action_bg}]", 
             f"[dim]{data['status']}[/dim]"
         )
         
         layout["market"].update(Panel(market_table, title=f"[bold]Market Data: {self.asset}[/bold]", border_style="white"))
         
+        # --- HISTORY TABLE ---
         history_table = Table(box=box.SIMPLE, expand=True, header_style="bold magenta")
         history_table.add_column("Time", style="dim")
         history_table.add_column("Result", justify="center")
@@ -147,64 +160,103 @@ class LiveTrader:
                 f"[{pnl_style}]${trade['profit']:.2f}[/{pnl_style}]"
             )
             
-        layout["history"].update(Panel(history_table, title="[bold]Session History[/bold]", border_style="magenta"))
+        layout["history"].update(Panel(history_table, title="[bold]Last 8 Trades[/bold]", border_style="magenta"))
         
-        footer_text = f"Mode: CALL-ONLY | Timeframe: {self.timeframe}s | Pulse: 2s"
+        footer_text = f"15s CALL-ONLY Sniper | Last Reconnect: {self.last_reconnect_time} | Count: {self.reconnect_attempts}"
         layout["footer"].update(Align.center(f"[dim]{footer_text}[/dim]"))
         return layout
-        
+
+    async def check_connection(self):
+        try:
+            # Check basic socket state
+            connected = await self.client.check_connect()
+            if not connected:
+                self.is_connected = False
+                self.market_state[self.asset]["status"] = "Wait... Reconnecting"
+                # Deep Reconnection (re-auth + ws restart)
+                check, _ = await self.client.connect()
+                if check:
+                    self.is_connected = True
+                    self.reconnect_attempts += 1
+                    self.last_reconnect_time = datetime.now().strftime("%H:%M")
+                    self.market_state[self.asset]["status"] = "Back Online!"
+            else:
+                self.is_connected = True
+        except Exception as e:
+            self.is_connected = False
+            with open(self.debug_file, "a") as f: f.write(f"Conn Watchdog Error: {e}\n")
+
     async def start(self):
         self.client.set_account_mode(self.mode)
-        check, reason = await self.client.connect()
-        if not check: return
-        self.global_balance = await self.client.get_balance()
+        try:
+            check, _ = await self.client.connect()
+            if check:
+                self.is_connected = True
+                self.global_balance = await self.client.get_balance()
+        except Exception as e:
+            with open(self.debug_file, "a") as f: f.write(f"Initial Connect Error: {e}\n")
+
         self.running = True
-        
         with Live(self.generate_dashboard(), refresh_per_second=2, screen=True) as live:
             while self.running:
                 try:
-                    await self.refresh_data(self.asset)
-                    self.global_balance = await self.client.get_balance() 
+                    await self.check_connection()
+                    
+                    if self.is_connected:
+                        await self.refresh_data(self.asset)
+                        self.global_balance = await self.client.get_balance() 
+                    
                     live.update(self.generate_dashboard())
+                    
+                    # Prevent memory creep in long sessions
+                    if len(self.trade_history) > 100:
+                        self.trade_history = self.trade_history[-50:]
+                        
                 except Exception as e:
-                    with open(self.debug_file, "a") as f: f.write(f"Loop error: {e}\n")
+                    with open(self.debug_file, "a") as f: f.write(f"Dashboard Loop Error: {e}\n")
                 
+                # High-frequency pulse
                 sleep_time = 2 if self.timeframe <= 15 else 5
                 await asyncio.sleep(sleep_time) 
 
     async def refresh_data(self, asset):
-        history_size = self.timeframe * 100 
-        candles = await self.client.get_candles(asset, time.time(), history_size, self.timeframe)
-        
-        if not candles or len(candles) < 30:
-            self.market_state[asset]["status"] = "Syncing Feed..."
-            return
+        try:
+            history_size = self.timeframe * 100 
+            candles = await self.client.get_candles(asset, time.time(), history_size, self.timeframe)
+            
+            if not candles or len(candles) < 30:
+                self.market_state[asset]["status"] = "Syncing Data..."
+                return
 
-        df = pd.DataFrame(candles)
-        df = df.sort_values('time').reset_index(drop=True)
-        for col in ['open', 'high', 'low', 'close']: df[col] = df[col].astype(float)
-        
-        decision = self.strategy.execute(df)
-        metrics = decision.get('metrics', {})
-        last_price = float(df['close'].iloc[-1])
-        
-        self.market_state[asset].update({
-            "price": last_price,
-            "rsi": metrics.get('rsi', 50.0),
-            "ema50": metrics.get('ema50', last_price),
-            "bb_up": metrics.get('bb_up', last_price),
-            "bb_low": metrics.get('bb_low', last_price),
-            "adx": metrics.get('adx', 0.0),
-            "pattern": metrics.get('pattern', "None"),
-            "score": decision['confluence_score'],
-            "action": decision['decision'],
-            "status": decision['reason']
-        })
+            df = pd.DataFrame(candles)
+            df = df.sort_values('time').reset_index(drop=True)
+            for col in ['open', 'high', 'low', 'close']: df[col] = df[col].astype(float)
+            
+            decision = self.strategy.execute(df)
+            metrics = decision.get('metrics', {})
+            last_price = float(df['close'].iloc[-1])
+            
+            self.market_state[asset].update({
+                "price": last_price,
+                "rsi": metrics.get('rsi', 50.0),
+                "ema50": metrics.get('ema50', last_price),
+                "bb_up": metrics.get('bb_up', last_price),
+                "bb_low": metrics.get('bb_low', last_price),
+                "adx": metrics.get('adx', 0.0),
+                "pattern": metrics.get('pattern', "None"),
+                "score": decision['confluence_score'],
+                "action": decision['decision'],
+                "status": decision['reason']
+            })
 
-        if decision['decision'] == "UP": 
-            # Non-blocking trade execution with cooldown
-            if time.time() - self.last_trade_time > self.timeframe: 
-                asyncio.create_task(self.execute_trade(asset, decision))
+            if decision['decision'] == "UP": 
+                # Avoid redundant trades on the same candle
+                if time.time() - self.last_trade_time > self.timeframe: 
+                    asyncio.create_task(self.execute_trade(asset, decision))
+        except Exception as e:
+            # Trigger reconnect logic if data fetch fails repeatedly
+            self.is_connected = False
+            with open(self.debug_file, "a") as f: f.write(f"Data Sync Error: {e}\n")
 
     async def execute_trade(self, asset, decision):
         async with self.trade_lock:
@@ -213,30 +265,40 @@ class LiveTrader:
             
             target = max(1, int(self.global_balance * 0.02))
             direction = "call"
-            self.market_state[asset]["status"] = "SNIPING CALL..."
+            self.market_state[asset]["status"] = "SNIPING UP..."
             
-            status, buy_info = await self.client.buy(target, asset, direction, self.timeframe)
-            if status:
-                # Wait for result in background
-                win_amount = await self.client.check_win(buy_info.get('id'))
-                outcome = "WIN" if win_amount > target else "LOSS" if win_amount < target else "DRAW"
-                profit = win_amount - target
+            try:
+                status, buy_info = await self.client.buy(target, asset, direction, self.timeframe)
                 
-                self.session_stats['total_trades'] += 1
-                if outcome == "WIN": self.session_stats['wins'] += 1
-                elif outcome == "LOSS": self.session_stats['losses'] += 1
-                else: self.session_stats['draws'] += 1
-                self.session_stats['pnl'] += profit
+                # Deep Log for Debugging
+                with open(self.debug_file, "a") as f:
+                    f.write(f"[{datetime.now().strftime('%H:%M:%S')}] TRADE ATTEMPT - Status: {status} | Info: {buy_info}\n")
                 
-                self.trade_history.append({
-                    "time": datetime.now().strftime("%H:%M:%S"),
-                    "asset": asset,
-                    "result": outcome,
-                    "profit": profit
-                })
-                self.market_state[asset]["status"] = f"Last: {outcome}"
-            else:
-                self.market_state[asset]["status"] = "Execution Blocked"
+                if status:
+                    # Non-blocking result check
+                    win_amount = await self.client.check_win(buy_info.get('id'))
+                    outcome = "WIN" if win_amount > target else "LOSS" if win_amount < target else "DRAW"
+                    profit = win_amount - target
+                    
+                    self.session_stats['total_trades'] += 1
+                    if outcome == "WIN": self.session_stats['wins'] += 1
+                    elif outcome == "LOSS": self.session_stats['losses'] += 1
+                    else: self.session_stats['draws'] += 1
+                    self.session_stats['pnl'] += profit
+                    
+                    self.trade_history.append({
+                        "time": datetime.now().strftime("%H:%M:%S"),
+                        "asset": asset,
+                        "result": outcome,
+                        "profit": profit
+                    })
+                else:
+                    self.market_state[asset]["status"] = "Trade Blocked"
+            except Exception as e:
+                import traceback
+                with open(self.debug_file, "a") as f:
+                    f.write(f"[{datetime.now().strftime('%H:%M:%S')}] EXECUTION ERROR:\n{traceback.format_exc()}\n")
+                self.market_state[asset]["status"] = "Execution Error"
 
     async def stop(self):
         self.running = False
