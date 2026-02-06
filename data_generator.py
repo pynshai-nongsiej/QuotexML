@@ -20,8 +20,8 @@ def generate_sample_data(n: int = 500, mode: str = "random_walk"):
         
         
         # Add linear trend to simulate EMA conditions
-        # Rise 50 points over N -> CHANGED: Trend = 0 for SNR Testing
-        trend_component = np.zeros(n) 
+        # Rise/Fall 20 points over N to create persistent crossovers
+        trend_component = np.linspace(0, 20 if np.random.random() > 0.5 else -20, n) 
         
         close = 100 + sine + trend_component + np.random.normal(0, 0.5, n)
         
@@ -120,6 +120,7 @@ def generate_sample_data(n: int = 500, mode: str = "random_walk"):
         low = np.minimum(open_p, close) - np.abs(np.random.normal(0, 0.1, n))
         
     volume = np.random.randint(100, 1000, n)
+    ticks = np.random.randint(1, 20, n) # Realistic tick intensity
     
     df = pd.DataFrame({
         'timestamp': timestamps,
@@ -127,7 +128,8 @@ def generate_sample_data(n: int = 500, mode: str = "random_walk"):
         'high': high,
         'low': low,
         'close': close,
-        'volume': volume
+        'volume': volume,
+        'ticks': ticks
     })
     return df
 

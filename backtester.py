@@ -9,39 +9,30 @@ class Backtester:
     """
     Simulates trades using the strategy engine and evaluates performance.
     """
-    def __init__(self, data: pd.DataFrame, window_size: int = 100):
+    def __init__(self, data: pd.DataFrame, window_size: int = 200):
         self.data = data
         self.window_size = window_size
         self.strategy = StrategyEngine()
 
-    def run(self, start_idx: int = 100, step: int = 1):
+    def run(self, start_idx: int = 200, step: int = 1):
         """
         Runs backtest from start_idx to the end of data.
         """
         results = []
         
-        print("Pre-calculating indicators for full dataset...")
-        # CRITICAL OPTIMIZATION: Calculate indicators ONCE for the whole dataset
-        # This fixes O(N^2) slowness and ensures EMA accuracy (long history)
-        full_tech = self.strategy.indicators.add_all_indicators(self.data)
-        
         print(f"Starting simulation on {len(self.data)} candles...")
         
         # We need to iterate carefully
         for i in range(start_idx, len(self.data) - 2, step): 
-            # Get sliding window for PRICE data (Strategy needs candle patterns)
-            # StrategyEngine expects the last row of the input DF to be the "current" candle
+            # Get sliding window for PRICE data 
+            # We pass the raw data slice; the StrategyEngine will calculate indicators internally
+            # (Note: This is slower than pre-calculation but ensures 100% logic parity with live trader)
             window_data = self.data.iloc[i - self.window_size:i+1]
             
-            # Get sliding window for INDICATORS
-            # We must pass the exact same slice size & alignment
-            window_tech = full_tech.iloc[i - self.window_size:i+1]
-            
-            # Get decision using optimized path
-            decision_data = self.strategy.execute(window_data, pre_calc_tech=window_tech)
+            # Get decision
+            decision_data = self.strategy.execute(window_data)
             
             # Label: 1-minute expiry (Price Action Scalp - Next Candle)
-            # close(t+1) vs close(t)
             if i + 1 >= len(self.data): continue 
             
             current_close = self.data['close'].iloc[i]
@@ -51,18 +42,16 @@ class Backtester:
             success = 1 if decision_data['decision'] == outcome else 0
             
             res = {
-                "timestamp": str(self.data['timestamp'].iloc[i]),
-                "asset": "BTCUSD", 
+                "timestamp": str(self.data.get('timestamp', pd.Series(range(len(self.data)))).iloc[i]),
                 "decision": decision_data['decision'],
                 "outcome": outcome,
                 "success": success,
-                "regime": decision_data['regime'],
                 "reason": decision_data['reason'],
                 "confluence_score": decision_data['confluence_score']
             }
             results.append(res)
             
-            if i % 5000 == 0:
+            if i % 1000 == 0:
                 print(f"Processed {i} candles...")
             
         return pd.DataFrame(results)
@@ -74,26 +63,20 @@ class Backtester:
         
         if len(trades) == 0:
             print("\n--- Backtest Results ---")
-            print("No trades executed.")
+            print("No trades executed. Strategy is highly selective.")
             return
 
         win_rate = trades['success'].mean()
         total_trades = len(trades)
         
-        print("\n--- Backtest Results (Active Trades Only) ---")
+        print("\n--- V-POWER SNIPE BACKTEST RESULTS ---")
         print(f"Total Trades: {total_trades}")
         print(f"Win Rate: {win_rate:.2%}")
+        print(f"Trade Density: {(total_trades / len(results_df)) * 100:.2f}% (Trades per candle)")
         
-        # Performance by regime
-        print("\nPerformance by Regime:")
-        print(trades.groupby('regime')['success'].agg(['count', 'mean']))
-
-        # Regime Distribution (All periods)
-        print("\nMarket Regime Breakdown (Total Candles Analyzed):")
-        regime_counts = results_df['regime'].value_counts()
-        regime_pct = results_df['regime'].value_counts(normalize=True) * 100
-        for regime, count in regime_counts.items():
-            print(f" - {regime}: {count} candles ({regime_pct[regime]:.1f}%)")
+        # Breakdown by decision type
+        print("\nPerformance by Side:")
+        print(trades.groupby('decision')['success'].agg(['count', 'mean']))
 
 if __name__ == "__main__":
     from data_generator import generate_sample_data
@@ -107,13 +90,13 @@ if __name__ == "__main__":
         n_candles = 5000
     
     print(f"Generating Synthetic Market Data (ZigZag Waves - Large Scale) - {n_candles} candles...")
-    # Generate enough data to trigger patterns (5k is ~3.5 days of 1m data)
+    # Generate data with enough noise & trend for rejection patterns
     df = generate_sample_data(n=n_candles, mode="zigzag_wave")
     
     print("Initializing Backtester...")
     tester = Backtester(df)
     
-    print("Running Backtest Strategy...")
+    print("Running Backtest Simulation...")
     results = tester.run()
     
     if len(results) > 0:

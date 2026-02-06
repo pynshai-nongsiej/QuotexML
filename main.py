@@ -97,13 +97,16 @@ async def main():
         console.print(f"[bold cyan]Target Asset: {asset}[/bold cyan]")
         
         # Timeframe Selection
-        console.print("\n[bold]Select Timeframe (M1/1m is RECOMMENDED)[/bold]")
-        tf_input = input("Enter Minutes (default 1) -> ").strip()
+        console.print("\n[bold]Select Timeframe (M1/60s or 15s are RECOMMENDED)[/bold]")
+        tf_input = input("Enter Timeframe [15s, 30s, 60s, 120s] (default 60) -> ").strip()
         
-        timeframe_map = {1: 60, 2: 120, 3: 180, 5: 300, 10: 600, 15: 900}
+        timeframe_map = {15: 15, 30: 30, 60: 60, 1: 60, 2: 120, 5: 300}
         timeframe = 60 # Default
-        if tf_input.isdigit() and int(tf_input) in timeframe_map:
-            timeframe = timeframe_map[int(tf_input)]
+        val = int(tf_input) if tf_input.isdigit() else 60
+        if val in timeframe_map:
+            timeframe = timeframe_map[val]
+        elif val == 15: # Safety catch
+            timeframe = 15
         
         console.print(f"[green]Applying Strategy Timeframe: {timeframe}s[/green]")
 

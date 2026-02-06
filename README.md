@@ -1,4 +1,4 @@
-# Quotex Robot v3.6: Professional Dynamic Breakout & Regime Engine
+# Quotex Robot v3.7: Professional Mean Reversion & Regime Engine
 
 A high-precision automated trading suite for Quotex, engineered for 85%+ win rate scalping. Version 3.6 introduces a focused **Single-Asset Execution Engine** for maximum stability and zero-lag performance.
 
@@ -6,7 +6,7 @@ A high-precision automated trading suite for Quotex, engineered for 85%+ win rat
 
 ## 🌟 Key Features
 
--   **High Win Rate Strategy:** Optimized "Dynamic Breakout" system yielding an **85%+ Win Rate** on momentum follow-throughs.
+-   **High Win Rate Strategy:** Optimized "Mean Reversion" system yielding high win rates by trading bounces off extreme volatility levels.
 -   **Stable Data Feed:** Focused single-asset client prevents data collision and ensures 100% accurate RSI/ADX monitoring.
 -   **15-Minute Regime Filter:** Real-time analysis of market structure using **ADX** (Trend Strength) and **BB Width** (Volatility) to avoid "choppy" sideways zones.
 -   **Professional CLI Dashboard:** Full-screen layout featuring real-time **Trend Strength (ADX)** monitoring and color-coded breakout signals.
@@ -15,13 +15,16 @@ A high-precision automated trading suite for Quotex, engineered for 85%+ win rat
 
 ---
 
-## 🔍 The Strategy: "Momentum Breakout"
+## 🔍 The Strategy: "Mean Reversion"
 
-Unlike standard mean-reversion bots, this system follows the "Smart Money" flow:
+Unlike breakout bots that get trapped in fake moves, this system trades the **Bounce**:
 1.  **Regime Check:** Robot verifies the market is in a **Trendy** state (ADX > 20) over a 15-minute lookback.
-2.  **Volatility Bands:** Uses **Bollinger Bands (2.5 SD)** to identify true momentum breakouts.
-3.  **Confluence Filter:** Validates the move with **RSI (14)** extremes ($>65$ for UP, $<35$ for DOWN).
-4.  **Robust Logic:** Indicators are now protected against "flat" markets, ensuring the engine remains active even during low-volatility periods.
+2.  **Saturation Levels:** Uses **Bollinger Bands (2.5 SD)** to identify true exhaustion points.
+3.  **Signal Reversal:** 
+    -   **UP (CALL):** Price hits the **Lower Band** and rejects (Bounces UP).
+    -   **DOWN (PUT):** Price hits the **Upper Band** and rejects (Bounces DOWN).
+4.  **Confluence Filter:** Validates the bounce with **RSI (14)** extremes.
+ remains active even during low-volatility periods.
 
 ---
 

@@ -18,7 +18,7 @@ from rich.panel import Panel
 from rich.console import Console
 from rich import box
 from rich.align import Align
-from rich.text import Text
+from rich.columns import Columns
 
 class LiveTrader:
     def __init__(self, email, password, assets=["EURUSD"], amount=1, timeframe=60, mode="PRACTICE"):
@@ -36,221 +36,212 @@ class LiveTrader:
             
         self.strategy = StrategyEngine()
         self.amount = amount
-        self.timeframe = timeframe # Default is 60s (1 Minute) based on Backtest
+        self.timeframe = timeframe 
         self.mode = mode 
         self.running = False
         self.log_file = "logs/learning_data.csv"
+        self.debug_file = "logs/debug_live.log"
         self.console = Console()
         
         # Shared State 
-        self.market_state = {self.asset: {"price": 0.0, "rsi": 0.0, "adx": 0.0, "score": 0.0, "status": "Initializing...", "action": "-", "profit": 0.0}}
+        self.market_state = {self.asset: {
+            "price": 0.0, "rsi": 50.0, "ema50": 0.0, "bb_up": 0.0, "bb_low": 0.0,
+            "adx": 0.0, "status": "Initializing...", "pattern": "-", "action": "-", "profit": 0.0
+        }}
+        
+        # Session Stats
+        self.session_stats = {
+            "total_trades": 0,
+            "wins": 0,
+            "losses": 0,
+            "draws": 0,
+            "pnl": 0.0
+        }
+        self.trade_history = [] # List of dicts: {time, asset, side, price, result, profit}
+        
         self.global_balance = 0.0
         
         os.makedirs("logs", exist_ok=True)
+        with open(self.debug_file, "w") as f:
+            f.write(f"--- Debug Started {datetime.now()} ---\n")
 
     def generate_dashboard(self):
-        """Create a professional single-asset dashboard layout using Rich."""
         layout = Layout()
         layout.split(
             Layout(name="header", size=4),
-            Layout(name="main"),
+            Layout(name="body"),
             Layout(name="footer", size=3)
         )
         
-        # --- HEADER ---
-        header_text = f"QUOTEX ROBOT v3.6 | {self.mode}"
+        # Split body into Market (Left) and History (Right)
+        layout["body"].split_row(
+            Layout(name="market", ratio=3),
+            Layout(name="history", ratio=2)
+        )
+        
+        data = self.market_state[self.asset]
         current_time = datetime.now().strftime("%H:%M:%S")
         
+        # --- HEADER (Summary Box) ---
         header_table = Table.grid(expand=True)
-        header_table.add_column("Left", justify="left")
-        header_table.add_column("Center", justify="center")
-        header_table.add_column("Right", justify="right")
-        
         header_table.add_row(
-            f"[bold cyan]{header_text}[/bold cyan]", 
+            f"[bold cyan]QUOTEX CALL SNIPER v5.3 | {self.mode}[/bold cyan]", 
             f"[bold white]Time: {current_time}[/bold white]",
             f"[bold green]Balance: ${self.global_balance:.2f}[/bold green]"
         )
         
-        layout["header"].update(Panel(header_table, style="blue"))
+        stats = self.session_stats
+        pnl_color = "green" if stats['pnl'] > 0 else "red" if stats['pnl'] < 0 else "white"
+        stats_line = f"[white]Trades: {stats['total_trades']} | Wins: [green]{stats['wins']}[/green] | Losses: [red]{stats['losses']}[/red] | P/L: [{pnl_color}]${stats['pnl']:.2f}[/{pnl_color}][/white]"
         
-        # --- MAIN TABLE ---
-        table = Table(box=box.DOUBLE_EDGE, expand=True, header_style="bold white on blue")
-        table.add_column("Asset", style="cyan", no_wrap=True)
-        table.add_column("Price", style="white")
-        table.add_column("RSI (14)", justify="center")
-        table.add_column("Trend (ADX)", justify="center")
-        table.add_column("Zone Status", justify="center")
-        table.add_column("Confluence", justify="right")
-        table.add_column("Action", justify="center")
-        table.add_column("Live Status", style="dim", width=35)
-        table.add_column("Session P/L", justify="right")
+        header_panel_content = Table.grid(expand=True)
+        header_panel_content.add_row(header_table)
+        header_panel_content.add_row(Align.center(stats_line))
+        
+        layout["header"].update(Panel(header_panel_content, style="blue"))
+        
+        # --- LEFT: MARKET TABLE ---
+        market_table = Table(box=box.DOUBLE_EDGE, expand=True, header_style="bold white on blue")
+        market_table.add_column("Indicator", style="cyan")
+        market_table.add_column("Value", justify="right")
+        market_table.add_column("Context", justify="center")
 
-        data = self.market_state[self.asset]
+        px = data['price']
+        ema = data['ema50']
+        trend_label = "UPTREND" if px > ema else "DOWNTREND"
+        trend_style = "bold green" if px > ema else "bold red"
         
-        # RSI Styling
         rsi_val = float(data.get('rsi', 50))
-        rsi_style = "bold green" if rsi_val > 65 else "bold red" if rsi_val < 35 else "white"
+        rsi_style = "bold green" if rsi_val > 60 else "bold red" if rsi_val < 40 else "white"
         
-        # ADX Styling
-        adx_val = float(data.get('adx', 0))
-        adx_style = "bold yellow" if adx_val > 25 else "dim"
+        bb_up, bb_low = data['bb_up'], data['bb_low']
+        zone = "MID"
+        zone_style = "white"
+        if px >= bb_up: zone, zone_style = "OVERBOUGHT", "bold red"
+        elif px <= bb_low: zone, zone_style = "OVERSOLD", "bold green"
         
-        # Zone Styling
-        zone = data.get('zone', 'Mid')
-        zone_style = "bold green" if zone == "High" else "bold red" if zone == "Low" else "dim"
+        market_table.add_row("Live Price", f"{px:.5f}", "[bold white]Active[/bold white]")
+        market_table.add_row("Trend (EMA50)", f"{ema:.5f}", f"[{trend_style}]{trend_label}[/{trend_style}]")
+        market_table.add_row("RSI (14)", f"{rsi_val:.1f}", f"[{rsi_style}]Momentum[/{rsi_style}]")
+        market_table.add_row("BB Zone", zone, f"[{zone_style}]Targeting[/{zone_style}]")
+        market_table.add_row("Candle Pattern", data['pattern'], "[dim]Recognition[/dim]")
         
-        score = float(data.get('score', 0))
-        score_style = "bold yellow" if score >= 0.8 else "green" if score >= 0.6 else "dim"
-        
-        action_bg = ""
-        if data['action'] == "UP": action_bg = "on green"
-        elif data['action'] == "DOWN": action_bg = "on red"
-        
-        pnl_color = "green" if data['profit'] > 0 else "red" if data['profit'] < 0 else "white"
-        
-        table.add_row(
-            f"[bold]{self.asset}[/bold]",
-            f"{data['price']:.5f}",
-            f"[{rsi_style}]{rsi_val:.1f}[/{rsi_style}]",
-            f"[{adx_style}]{adx_val:.1f}[/{adx_style}]",
-            f"[{zone_style}]{zone}[/{zone_style}]",
-            f"[{score_style}]{score:.2f}[/{score_style}]",
-            f"[bold white {action_bg}] {data['action']} [/bold white {action_bg}]",
-            data['status'],
-            f"[{pnl_color}]${data['profit']:.2f}[/{pnl_color}]"
+        action_bg = "on green" if data['action'] == "UP" else ""
+        market_table.add_row(
+            "[bold yellow]CURRENT SIGNAL[/bold yellow]", 
+            f"[bold white {action_bg}] {data['action']} [/bold white {action_bg}]", 
+            f"[dim]{data['status']}[/dim]"
         )
+        
+        layout["market"].update(Panel(market_table, title=f"[bold]Market Data: {self.asset}[/bold]", border_style="white"))
+        
+        # --- RIGHT: TRADE HISTORY ---
+        history_table = Table(box=box.SIMPLE, expand=True, header_style="bold magenta")
+        history_table.add_column("Time", style="dim")
+        history_table.add_column("Result", justify="center")
+        history_table.add_column("P/L", justify="right")
+
+        # Show last 8 trades
+        for trade in reversed(self.trade_history[-8:]):
+            res_style = "bold green" if trade['result'] == "WIN" else "bold red" if trade['result'] == "LOSS" else "white"
+            pnl_style = "green" if trade['profit'] > 0 else "red" if trade['profit'] < 0 else "white"
+            history_table.add_row(
+                trade['time'],
+                f"[{res_style}]{trade['result']}[/{res_style}]",
+                f"[{pnl_style}]${trade['profit']:.2f}[/{pnl_style}]"
+            )
             
-        layout["main"].update(Panel(table, title=f"[bold]Monitoring: {self.asset}[/bold]", border_style="white"))
+        layout["history"].update(Panel(history_table, title="[bold]Session History[/bold]", border_style="magenta"))
         
         # --- FOOTER ---
-        footer_text = f"Strategy: Dynamic Breakout | Timeframe: {self.timeframe}s (M1) | Regime: 15m Trend Filter"
+        footer_text = "Mode: CALL-ONLY Precision Sniper | 2s Pulse Feed | High Intensity 15s"
         layout["footer"].update(Align.center(f"[dim]{footer_text}[/dim]"))
-        
         return layout
         
     async def start(self):
         self.client.set_account_mode(self.mode)
-        print(f"Connecting to {self.asset} channel...")
         check, reason = await self.client.connect()
-        if not check:
-            print(f"Connection failed: {reason}")
-            return
-            
+        if not check: return
         self.global_balance = await self.client.get_balance()
         self.running = True
         
-        with Live(self.generate_dashboard(), refresh_per_second=4, screen=True) as live:
-            async def update_ui():
+        with Live(self.generate_dashboard(), refresh_per_second=2, screen=True) as live:
+            async def update_loop():
                 while self.running:
                     try:
+                        await self.refresh_data(self.asset)
                         self.global_balance = await self.client.get_balance() 
                         live.update(self.generate_dashboard())
-                    except: pass
-                    await asyncio.sleep(1)
+                    except Exception as e:
+                        with open(self.debug_file, "a") as f: f.write(f"Loop error: {e}\n")
+                    
+                    sleep_time = 2 if self.timeframe <= 15 else 5
+                    await asyncio.sleep(sleep_time) 
 
-            tasks = [self.trading_loop(self.asset)]
-            tasks.append(update_ui())
+            await update_loop()
+
+    async def refresh_data(self, asset):
+        history_size = self.timeframe * 100 
+        candles = await self.client.get_candles(asset, time.time(), history_size, self.timeframe)
+        
+        if not candles or len(candles) < 30:
+            self.market_state[asset]["status"] = "Syncing Feed..."
+            return
+
+        df = pd.DataFrame(candles)
+        df = df.sort_values('time').reset_index(drop=True)
+        for col in ['open', 'high', 'low', 'close']: df[col] = df[col].astype(float)
+        
+        decision = self.strategy.execute(df)
+        metrics = decision.get('metrics', {})
+        last_price = float(df['close'].iloc[-1])
+        
+        self.market_state[asset].update({
+            "price": last_price,
+            "rsi": metrics.get('rsi', 50.0),
+            "ema50": metrics.get('ema50', last_price),
+            "bb_up": metrics.get('bb_up', last_price),
+            "bb_low": metrics.get('bb_low', last_price),
+            "adx": metrics.get('adx', 0.0),
+            "pattern": metrics.get('pattern', "None"),
+            "score": decision['confluence_score'],
+            "action": decision['decision'],
+            "status": decision['reason']
+        })
+
+        if decision['decision'] == "UP": 
+            await self.execute_trade(asset, decision)
+
+    async def execute_trade(self, asset, decision):
+        target = max(1, int(self.global_balance * 0.02))
+        direction = "call"
+        self.market_state[asset]["status"] = "SNIPING CALL..."
+        
+        status, buy_info = await self.client.buy(target, asset, direction, self.timeframe)
+        if status:
+            win_amount = await self.client.check_win(buy_info.get('id'))
+            outcome = "WIN" if win_amount > target else "LOSS" if win_amount < target else "DRAW"
+            profit = win_amount - target
             
-            await asyncio.gather(*tasks)
+            # Update Stats
+            self.session_stats['total_trades'] += 1
+            if outcome == "WIN": self.session_stats['wins'] += 1
+            elif outcome == "LOSS": self.session_stats['losses'] += 1
+            else: self.session_stats['draws'] += 1
+            self.session_stats['pnl'] += profit
+            
+            # Record History
+            self.trade_history.append({
+                "time": datetime.now().strftime("%H:%M:%S"),
+                "asset": asset,
+                "result": outcome,
+                "profit": profit
+            })
+            
+            self.market_state[asset]["status"] = f"Last Result: {outcome}"
+        else:
+            self.market_state[asset]["status"] = "Execution Blocked"
 
     async def stop(self):
         self.running = False
-        if self.client:
-            await self.client.close()
-
-    def log_trade(self, features, outcome, reason, score):
-        result = 1 if outcome == "WIN" else 0
-        data = {
-            "timestamp": time.time(),
-            "reason": reason,
-            "score": score,
-            "result": result
-        }
-        if features is not None:
-             for i, val in enumerate(features):
-                data[f"f_{i}"] = val
-        df = pd.DataFrame([data])
-        df.to_csv(self.log_file, mode='a', index=False, header=not os.path.isfile(self.log_file))
-
-    def calculate_trade_amount(self, balance):
-        risk_percentage = 0.02
-        return max(1, int(balance * risk_percentage))
-
-    async def trading_loop(self, asset):
-        while self.running:
-            try:
-                # --- CLOCK SYNC ---
-                now_ts = time.time()
-                elapsed = now_ts % self.timeframe
-                wait_time = self.timeframe - elapsed - 0.5
-                
-                if wait_time > 2:
-                    self.market_state[asset]["status"] = f"Syncing... Wait {int(wait_time)}s"
-                    await asyncio.sleep(wait_time)
-                
-                self.market_state[asset]["status"] = "Refreshing Data..."
-                
-                # Use a larger history to ensure indicators are not NaN (200 candles)
-                history_size = 12000 # 200 * 60s
-                candles = await self.client.get_candles(asset, time.time(), history_size, self.timeframe)
-                
-                if not candles or len(candles) < 30:
-                    self.market_state[asset]["status"] = "API Delay: Retrying..."
-                    await asyncio.sleep(1)
-                    continue
-
-                df = pd.DataFrame(candles)
-                decision = self.strategy.execute(df)
-                
-                # Update State
-                metrics = decision.get('metrics', {}) 
-                price = float(df['close'].iloc[-1])
-                
-                zone = "Mid"
-                if price >= metrics.get('dyn_res', 999999): zone = "High"
-                elif price <= metrics.get('dyn_sup', 0): zone = "Low"
-                
-                self.market_state[asset].update({
-                    "price": price,
-                    "rsi": metrics.get('rsi', 50),
-                    "adx": metrics.get('adx', 0),
-                    "zone": zone,
-                    "score": decision['confluence_score'],
-                    "action": decision['decision'],
-                    "status": f"{decision['reason']}"
-                })
-
-                if decision['decision'] in ["UP", "DOWN"]: 
-                    target = self.calculate_trade_amount(self.global_balance)
-                    direction = "call" if decision['decision'] == "UP" else "put"
-                    
-                    self.market_state[asset]["status"] = f"EXECUTING {direction.upper()}..."
-                    status, buy_info = await self.client.buy(target, asset, direction, self.timeframe)
-                    
-                    if status:
-                        self.market_state[asset]["status"] = "Position Active..."
-                        win = await self.client.check_win(buy_info.get('id'))
-                        self.global_balance = await self.client.get_balance()
-                        
-                        profit_change = 0
-                        outcome = "LOSS"
-                        if win > target:
-                            outcome = "WIN"
-                            profit_change = win - target
-                        elif win == target:
-                            outcome = "DRAW"
-                        else:
-                            profit_change = -target
-
-                        self.market_state[asset]["profit"] += profit_change
-                        self.market_state[asset]["status"] = f"Result: {outcome}"
-                        self.log_trade(decision['features'], outcome, decision['reason'], decision['confluence_score'])
-                    else:
-                        self.market_state[asset]["status"] = "Execution Error"
-                
-                await asyncio.sleep(2) 
-
-            except Exception as e:
-                self.market_state[asset]["status"] = f"Error: {str(e)[:15]}"
-                await asyncio.sleep(2)
+        await self.client.close()
