@@ -22,16 +22,22 @@ from rich.text import Text
 
 class LiveTrader:
     def __init__(self, email, password, assets=["EURUSD"], amount=1, timeframe=60, mode="PRACTICE"):
-        primary_asset = assets[0] if isinstance(assets, list) else assets
-        self.client = Quotex(
-            email=email,
-            password=password,
-            lang="en",
-            asset_default=primary_asset,
-            period_default=timeframe
-        )
-        self.strategy = StrategyEngine()
+        self.email = email
+        self.password = password
         self.assets = assets if isinstance(assets, list) else [assets]
+        
+        # Isolated Clients: One per asset to prevent data collision
+        self.clients = {}
+        for asset in self.assets:
+            self.clients[asset] = Quotex(
+                email=email,
+                password=password,
+                lang="en",
+                asset_default=asset,
+                period_default=timeframe
+            )
+            
+        self.strategy = StrategyEngine()
         self.amount = amount
         self.timeframe = timeframe # Default is 60s (1 Minute) based on Backtest
         self.mode = mode 
@@ -128,21 +134,31 @@ class LiveTrader:
         return layout
         
     async def start(self):
-        self.client.set_account_mode(self.mode)
-        print("Connecting...")
-        check, reason = await self.client.connect()
-        if not check:
-            print(f"Connection failed: {reason}")
-            return
+        # Set account mode and connect all isolated clients
+        connect_tasks = []
+        for asset, client in self.clients.items():
+            client.set_account_mode(self.mode)
+            connect_tasks.append(client.connect())
             
-        self.global_balance = await self.client.get_balance()
+        print("Connecting isolated asset channels...")
+        results = await asyncio.gather(*connect_tasks)
+        
+        for (check, reason), asset in zip(results, self.assets):
+             if not check:
+                 print(f"Connection failed for {asset}: {reason}")
+                 return
+            
+        # Get initial balance from the first client (Balance is account-wide)
+        primary_client = self.clients[self.assets[0]]
+        self.global_balance = await primary_client.get_balance()
         self.running = True
         
         # Start Dashboard Loop + Trading Loops
         with Live(self.generate_dashboard(), refresh_per_second=4, screen=True) as live:
             async def update_ui():
                 while self.running:
-                    self.global_balance = await self.client.get_balance() # Periodic balance check
+                    # Periodic balance check using primary client
+                    self.global_balance = await primary_client.get_balance() 
                     live.update(self.generate_dashboard())
                     await asyncio.sleep(1)
 
@@ -153,8 +169,8 @@ class LiveTrader:
 
     async def stop(self):
         self.running = False
-        if self.client:
-            await self.client.close()
+        close_tasks = [client.close() for client in self.clients.values()]
+        await asyncio.gather(*close_tasks)
 
     def log_trade(self, features, outcome, reason, score):
         result = 1 if outcome == "WIN" else 0
@@ -177,19 +193,16 @@ class LiveTrader:
         return max(1, int(target_amount))
 
     async def trading_loop(self, asset):
+        client = self.clients[asset]
         while self.running:
             try:
                 # --- CLOCK SYNC ---
-                # Sync to the end of the current timeframe candle
-                # e.g., for 300s (5m), align to xx:00, xx:05, xx:10, etc.
                 now_ts = time.time()
                 timeframe_sec = self.timeframe
                 
                 # Seconds elapsed in current candle
                 elapsed = now_ts % timeframe_sec
                 
-                # Wait until just before the CLOSE of this candle (e.g. 299s)
-                # We want to wake up at (timeframe - 0.5s) to fetch data and trade at :00
                 wait_time = timeframe_sec - elapsed - 0.5
                 
                 if wait_time > 2:
@@ -200,7 +213,8 @@ class LiveTrader:
                 
                 # Fetch more history for accurate indicators
                 history_size = self.timeframe * 200 
-                candles = await self.client.get_candles(asset, time.time(), history_size, self.timeframe)
+                # Use isolated client for this specific asset
+                candles = await client.get_candles(asset, time.time(), history_size, self.timeframe)
                 
                 if not candles or len(candles) < 50:
                     self.market_state[asset]["status"] = "Waiting for Data..."
@@ -236,14 +250,14 @@ class LiveTrader:
                     direction = "call" if decision['decision'] == "UP" else "put"
                     
                     self.market_state[asset]["status"] = f"EXECUTING {direction.upper()} (${target})..."
-                    status, buy_info = await self.client.buy(target, asset, direction, self.timeframe)
+                    status, buy_info = await client.buy(target, asset, direction, self.timeframe)
                     
                     if status:
                         self.market_state[asset]["status"] = "Trade Active..."
-                        win = await self.client.check_win(buy_info.get('id'))
+                        win = await client.check_win(buy_info.get('id'))
                         
-                        # Accuracy Fix: Refresh Balance
-                        self.global_balance = await self.client.get_balance()
+                        # Accuracy Fix: Refresh Balance using current client
+                        self.global_balance = await client.get_balance()
                         
                         # Robust Result Interpretation
                         profit_change = 0
