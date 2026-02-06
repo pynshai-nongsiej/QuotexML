@@ -12,8 +12,10 @@ class IndicatorEngine:
         delta = df['close'].diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-        rs = gain / loss
-        return 100 - (100 / (1 + rs))
+        # Handle division by zero for flat markets
+        rs = gain / loss.replace(0, np.nan)
+        rsi = 100 - (100 / (1 + rs.fillna(0)))
+        return rsi.fillna(50) # Default to neutral 50 for flat markets
 
     @staticmethod
     def ema(df: pd.DataFrame, period: int) -> pd.Series:
@@ -93,12 +95,16 @@ class IndicatorEngine:
         
         # Smoothed TR, +DM, -DM
         tr = IndicatorEngine.atr(df, period)
-        plus_di = 100 * (plus_dm.rolling(window=period).mean() / tr)
-        minus_di = 100 * (minus_dm.rolling(window=period).mean() / tr)
+        plus_di = 100 * (plus_dm.rolling(window=period).mean() / tr.replace(0, np.nan))
+        minus_di = 100 * (minus_dm.rolling(window=period).mean() / tr.replace(0, np.nan))
         
-        dx = 100 * np.abs(plus_di - minus_di) / (plus_di + minus_di)
-        adx = dx.rolling(window=period).mean()
-        return adx
+        plus_di = plus_di.fillna(0)
+        minus_di = minus_di.fillna(0)
+        
+        sum_di = plus_di + minus_di
+        dx = 100 * np.abs(plus_di - minus_di) / sum_di.replace(0, np.nan)
+        adx = dx.fillna(0).rolling(window=period).mean()
+        return adx.fillna(0)
 
     @staticmethod
     def zigzag(df: pd.DataFrame, deviation: int = 5, depth: int = 12, backstep: int = 3) -> pd.Series:
@@ -248,7 +254,9 @@ class IndicatorEngine:
         df['adx'] = self.adx(df, period=14)
         
         # Bollinger Band Width (Ratio for Volatility check)
-        df['bb_width'] = (df['bb_upper'] - df['bb_lower']) / df['bb_mid']
+        # Avoid division by zero if mid is 0 (impossible for price usually, but safe)
+        df['bb_width'] = (df['bb_upper'] - df['bb_lower']) / df['bb_mid'].replace(0, np.nan)
+        df['bb_width'] = df['bb_width'].fillna(0)
         
         return df
 

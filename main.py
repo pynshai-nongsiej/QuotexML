@@ -6,21 +6,21 @@ from strategy_engine import StrategyEngine
 from backtester import Backtester
 from data_generator import generate_sample_data
 from live_trader import LiveTrader
-from rich import box
-from rich.panel import Panel
-from rich.table import Table
 from rich.console import Console
+from rich.table import Table
+from rich.panel import Panel
 from pyquotex.stable_api import Quotex
+from rich import box
 
 console = Console()
 
 async def get_asset_choice(client):
-    """Fetch and select assets from Quotex."""
+    """Fetch and select a single asset from Quotex."""
     console.print("[bold yellow]Fetching available assets...[/bold yellow]")
     assets = client.get_all_asset_name()
     if not assets:
         console.print("[red]Could not fetch assets. Using default: EURUSD[/red]")
-        return ["EURUSD"]
+        return "EURUSD"
     
     table = Table(title="Available Quotex Assets", show_header=True, header_style="bold green", box=box.ROUNDED)
     table.add_column("#", style="dim", width=4)
@@ -31,28 +31,22 @@ async def get_asset_choice(client):
         table.add_row(str(idx + 1), code, name)
     
     console.print(table)
-    console.print("\n[bold]Multi-select enabled: Enter numbers separated by commas (e.g., 1,2,5).[/bold]")
-    choice = input("Select Asset Numbers -> ")
+    choice = input("\nSelect Asset Number -> ").strip()
     
-    selected_assets = []
     try:
-        parts = [p.strip() for p in choice.split(",")]
-        for part in parts:
-            if part.isdigit():
-                idx = int(part) - 1
-                if 0 <= idx < len(assets):
-                    selected_assets.append(assets[idx][0])
+        if choice.isdigit():
+            idx = int(choice) - 1
+            if 0 <= idx < len(assets):
+                return assets[idx][0]
     except Exception:
         pass
     
-    if not selected_assets:
-        return ["EURUSD"]
-        
-    return selected_assets[:5] # Limit parallel assets to 5
+    console.print("[yellow]Invalid choice. Defaulting to EURUSD.[/yellow]")
+    return "EURUSD"
 
 async def main():
     console.print(Panel.fit(
-        "[bold cyan]QUOTEX ROBOT v3.0[/bold cyan]\n[dim]High-Win Rate Dynamic Breakout Strategy[/dim]", 
+        "[bold cyan]QUOTEX ROBOT v3.6[/bold cyan]\n[dim]High-Win Rate Dynamic Breakout Engine[/dim]", 
         border_style="blue"
     ))
     
@@ -63,7 +57,6 @@ async def main():
     if mode == "1":
         console.print(Panel("Backtest Data Configuration", border_style="blue"))
         
-        # User Input for Data Size (Synced with backtester.py)
         try:
             cand_input = input("Enter number of candles to simulate (default 5000): ").strip()
             n_candles = int(cand_input) if cand_input else 5000
@@ -88,7 +81,6 @@ async def main():
     elif mode == "2":
         console.print(Panel("[bold green]Live Deployment Setup[/bold green]", border_style="green"))
         
-        # In a real scenario, we might use env variables or a config file
         email = "johnrocknongsiej123@gmail.com"
         password = "DariDaling1@"
         
@@ -99,14 +91,13 @@ async def main():
             console.print(f"[red]Authentication failed: {reason}[/red]")
             return
         
-        assets = await get_asset_choice(temp_client)
+        asset = await get_asset_choice(temp_client)
         await temp_client.close()
         
-        console.print(f"[bold cyan]Target Assets: {', '.join(assets)}[/bold cyan]")
+        console.print(f"[bold cyan]Target Asset: {asset}[/bold cyan]")
         
-        # Timeframe Selection - Recommendation applied
-        console.print("\n[bold]Select Timeframe (M1/1m is RECOMMENDED for 85% WR)[/bold]")
-        console.print("Available: 1, 2, 3, 5, 10, 15 (minutes)")
+        # Timeframe Selection
+        console.print("\n[bold]Select Timeframe (M1/1m is RECOMMENDED)[/bold]")
         tf_input = input("Enter Minutes (default 1) -> ").strip()
         
         timeframe_map = {1: 60, 2: 120, 3: 180, 5: 300, 10: 600, 15: 900}
@@ -120,9 +111,9 @@ async def main():
         mode_str = "REAL" if account_type == "2" else "PRACTICE"
         
         console.print("[bold yellow]Launching Professional Dashboard...[/bold yellow]")
-        await asyncio.sleep(1) # Visual pause
+        await asyncio.sleep(1) 
         
-        trader = LiveTrader(email, password, assets=assets, amount=1, timeframe=timeframe, mode=mode_str)
+        trader = LiveTrader(email, password, assets=[asset], amount=1, timeframe=timeframe, mode=mode_str)
         try:
             await trader.start()
         except KeyboardInterrupt:
