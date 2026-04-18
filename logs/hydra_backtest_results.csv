@@ -1,0 +1,6 @@
+idx,timestamp,decision,actual,won,confidence,regime,reason,stake,pnl,specialist_votes
+130,130,DOWN,UP,False,0.88,HYPER_MOMENTUM,HA Bearish Continuation Surge,1.0,-1.0,{}
+131,131,UP,DOWN,False,0.82,HYPER_REVERSAL,HA Exhaustion Reversal (Long),1.0,-1.0,{}
+133,133,UP,UP,True,0.88,HYPER_MOMENTUM,HA Bullish Continuation Surge,1.6,1.2800000000000002,{}
+134,134,UP,DOWN,False,0.88,HYPER_MOMENTUM,HA Bullish Continuation Surge,1.0,-1.0,{}
+135,135,UP,DOWN,False,0.88,HYPER_MOMENTUM,HA Bullish Continuation Surge,1.0,-1.0,{}

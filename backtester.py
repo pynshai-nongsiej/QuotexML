@@ -9,10 +9,10 @@ class Backtester:
     """
     Simulates trades using the strategy engine and evaluates performance.
     """
-    def __init__(self, data: pd.DataFrame, window_size: int = 200):
+    def __init__(self, data: pd.DataFrame, window_size: int = 200, strategy=None):
         self.data = data
         self.window_size = window_size
-        self.strategy = StrategyEngine()
+        self.strategy = strategy if strategy is not None else StrategyEngine()
 
     def run(self, start_idx: int = 200, step: int = 1):
         """
